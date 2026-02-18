@@ -1,0 +1,318 @@
+# handlers.py
+import json
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+from storage import read_json, write_json, read_text, write_text
+from messages import START_MSG, HELP_MSG
+from utils import ADMIN_IDS
+import random
+
+logger = logging.getLogger(__name__)
+
+def is_admin(user_id: int) -> bool:
+    return user_id in (ADMIN_IDS or [])
+
+# /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    users = read_json("users.json", {})
+    users[str(user.id)] = {"id": user.id, "name": user.full_name}
+    write_json("users.json", users)
+    await update.message.reply_text(START_MSG)
+
+# /help
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(HELP_MSG)
+
+# /about
+async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = read_text("about.txt", "အသင်းအကြောင်း မရှိသေးပါ။ (Admin များ /eabout ဖြင့် ပြင်နိုင်သည်)")
+    await update.message.reply_text(text)
+
+async def eabout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("သင်သည် admin မဟုတ်ပါ။")
+        return
+    if not context.args:
+        await update.message.reply_text("အသင်းအကြောင်းကို ထည့်ရန် /eabout <text> ရိုက်ပါ။")
+        return
+    text = " ".join(context.args)
+    write_text("about.txt", text)
+    await update.message.reply_text("အသင်းအကြောင်းကို သိမ်းဆည်းပြီးပါပြီ။")
+
+# contact / econtact
+async def contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    contacts = read_json("contacts.json", {})
+    if not contacts:
+        await update.message.reply_text("တာဝန်ခံ ဖုန်းနံပါတ် မရှိသေးပါ။")
+        return
+    lines = [f"{name} - {phone}" for name, phone in contacts.items()]
+    await update.message.reply_text("\n".join(lines))
+
+async def econtact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("သင်သည် admin မဟုတ်ပါ။")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "အသုံး: /econtact add|list|delete|clear\n"
+            "Examples:\n"
+            "/econtact add Name Phone\n"
+            "/econtact list\n"
+            "/econtact delete Name\n"
+            "/econtact clear confirm"
+        )
+        return
+    sub = context.args[0].lower()
+    contacts = read_json("contacts.json", {})
+    if sub == "add":
+        if len(context.args) < 3:
+            await update.message.reply_text("အသုံး: /econtact add <Name> <Phone>")
+            return
+        name, phone = context.args[1], context.args[2]
+        contacts[name] = phone
+        write_json("contacts.json", contacts)
+        await update.message.reply_text(f"Contact added: {name} - {phone}")
+    elif sub == "list":
+        if not contacts:
+            await update.message.reply_text("Contacts မရှိသေးပါ။")
+            return
+        await update.message.reply_text("\n".join([f"{n} - {p}" for n, p in contacts.items()]))
+    elif sub == "delete":
+        if len(context.args) < 2:
+            await update.message.reply_text("အသုံး: /econtact delete <Name>")
+            return
+        name = context.args[1]
+        if name in contacts:
+            contacts.pop(name)
+            write_json("contacts.json", contacts)
+            await update.message.reply_text(f"Deleted contact: {name}")
+        else:
+            await update.message.reply_text(f"No contact named {name} found.")
+    elif sub == "clear":
+        if len(context.args) >= 2 and context.args[1].lower() == "confirm":
+            write_json("contacts.json", {})
+            await update.message.reply_text("All contacts cleared.")
+        else:
+            await update.message.reply_text("သတိပေးချက်: Contacts အားလုံး ဖျက်မည်။ ဆက်လက်ရန် `/econtact clear confirm` ရိုက်ပါ။")
+    else:
+        await update.message.reply_text("Unknown subcommand. Use add|list|delete|clear.")
+
+# events / eevents
+async def events(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    events = read_json("events.json", [])
+    if not events:
+        await update.message.reply_text("လာမည့် အစီအစဉ် မရှိသေးပါ။")
+        return
+    lines = [f"{e['date']} - {e.get('time','')} - {e['title']} - {e.get('place','')}" for e in events]
+    await update.message.reply_text("\n".join(lines))
+
+async def eevents(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("သင်သည် admin မဟုတ်ပါ။")
+        return
+    if not context.args:
+        await update.message.reply_text("အသုံး: /eevents add|clear|list or /eevents add date|time|title|place")
+        return
+    cmd = context.args[0].lower()
+    events = read_json("events.json", [])
+    if cmd == "add":
+        rest = " ".join(context.args[1:])
+        parts = rest.split("|")
+        if len(parts) < 3:
+            await update.message.reply_text("အသုံး: /eevents add date|time|title|place")
+            return
+        event = {"date": parts[0].strip(), "time": parts[1].strip(), "title": parts[2].strip(), "place": parts[3].strip() if len(parts)>3 else ""}
+        events.append(event)
+        write_json("events.json", events)
+        await update.message.reply_text("Event added.")
+    elif cmd == "clear":
+        write_json("events.json", [])
+        await update.message.reply_text("Events cleared.")
+    else:
+        await update.message.reply_text("Unknown subcommand.")
+
+# birthday / ebirthday
+async def birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    b = read_json("birthdays.json", [])
+    if not b:
+        await update.message.reply_text("မည်သူ့မွေးနေ့မှတ်တမ်း မရှိသေးပါ။")
+        return
+    lines = [f"{item['name']} - {item['date']}" for item in b]
+    await update.message.reply_text("\n".join(lines))
+
+async def ebirthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("သင်သည် admin မဟုတ်ပါ။")
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("အသုံး: /ebirthday <Name> <YYYY-MM-DD>")
+        return
+    name = context.args[0]
+    date = context.args[1]
+    b = read_json("birthdays.json", [])
+    b.append({"name": name, "date": date})
+    write_json("birthdays.json", b)
+    await update.message.reply_text("Birthday added.")
+
+# pray
+async def pray(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("အသုံး: /pray <text>")
+        return
+    text = " ".join(context.args)
+    prayers = read_json("prayers.json", [])
+    prayers.append({"user": update.effective_user.full_name, "text": text})
+    write_json("prayers.json", prayers)
+    await update.message.reply_text("သင်၏ ဆုတောင်းကို မှတ်တမ်းတင်ပြီးပါပြီ။")
+
+# verse (file-based)
+async def verse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    verses = read_json("verses.json", [])
+    if not verses:
+        await update.message.reply_text("ကျမ်းပိုဒ် မရှိသေးပါ။ Admin ထည့်ပေးပါ။")
+        return
+    v = random.choice(verses)
+    await update.message.reply_text(v)
+
+# quiz (file-based)
+async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    quizzes = read_json("quizzes.json", [])
+    if not quizzes:
+        await update.message.reply_text("Quiz မရှိသေးပါ။ Admin ထည့်ပေးပါ။")
+        return
+
+    q = random.choice(quizzes)
+    # normalize options: support dict or list
+    opts = q.get("options") or {}
+    if isinstance(opts, list):
+        letters = ["A", "B", "C", "D"]
+        opts = {letters[i]: opts[i] for i in range(min(len(opts), 4))}
+    # save session to sessions.json for callback fallback
+    sessions = read_json("sessions.json", {})
+    sessions[str(update.effective_user.id)] = q
+    write_json("sessions.json", sessions)
+
+    context.user_data["current_quiz"] = q
+    keyboard = [
+        [InlineKeyboardButton(f"A) {opts.get('A','')}", callback_data="quiz_A")],
+        [InlineKeyboardButton(f"B) {opts.get('B','')}", callback_data="quiz_B")],
+        [InlineKeyboardButton(f"C) {opts.get('C','')}", callback_data="quiz_C")],
+        [InlineKeyboardButton(f"D) {opts.get('D','')}", callback_data="quiz_D")]
+    ]
+    await update.message.reply_text(q.get("question", "No question"), reply_markup=InlineKeyboardMarkup(keyboard))
+
+# quiz answer callback
+async def quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    q = context.user_data.get("current_quiz")
+    if not q:
+        sessions = read_json("sessions.json", {})
+        q = sessions.get(str(update.effective_user.id))
+        if not q:
+            await query.edit_message_text("Quiz မရှိပါ။ /quiz ဖြင့် စတင်ပါ။")
+            return
+
+    opts = q.get("options") or {}
+    if isinstance(opts, list):
+        letters = ["A", "B", "C", "D"]
+        opts = {letters[i]: opts[i] for i in range(min(len(opts), 4))}
+
+    parts = query.data.split("_")
+    if len(parts) < 2:
+        await query.edit_message_text("Invalid answer data.")
+        return
+    choice = parts[1].upper()
+
+    # simple scoring stored in users.json
+    users = read_json("users.json", {})
+    uid = str(update.effective_user.id)
+    if uid not in users:
+        users[uid] = {"id": int(uid), "name": update.effective_user.full_name, "score": 0}
+
+    answer_letter = q.get("answer_letter")
+    if not answer_letter:
+        # try to infer index-based answer
+        answer_index = q.get("answer_index")
+        if isinstance(answer_index, int):
+            letters = ["A", "B", "C", "D"]
+            answer_letter = letters[answer_index] if answer_index < 4 else None
+
+    if choice == answer_letter:
+        users[uid]["score"] = users[uid].get("score", 0) + 1
+        write_json("users.json", users)
+        await query.edit_message_text(f"✅ မှန်ကန်ပါတယ်! အဖြေ: {answer_letter}) {opts.get(answer_letter)}\n\nသင့် score: {users[uid]['score']}")
+    else:
+        write_json("users.json", users)
+        await query.edit_message_text(f"❌ မှားသွားပါတယ်။ အမှန်အဖြေက {answer_letter}) {opts.get(answer_letter)} ဖြစ်ပါတယ်။\n\nသင့် score: {users[uid].get('score',0)}")
+
+# leaderboard
+async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    users = read_json("users.json", {})
+    if not users:
+        await update.message.reply_text("Leaderboard မရှိသေးပါ။")
+        return
+    rows = sorted(users.values(), key=lambda x: x.get("score",0), reverse=True)[:10]
+    lines = [f"{i+1}. {r['name']} - {r.get('score',0)} points" for i, r in enumerate(rows)]
+    await update.message.reply_text("🏆 Leaderboard\n" + "\n".join(lines))
+
+# broadcast (file-based groups)
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("သင်သည် admin မဟုတ်ပါ။")
+        return
+    if not context.args:
+        await update.message.reply_text("အသုံး: /broadcast <message>")
+        return
+    msg = " ".join(context.args)
+    groups = read_json("groups.json", [])
+    sent = 0
+    for gid in groups:
+        try:
+            await context.bot.send_message(chat_id=int(gid), text=msg)
+            sent += 1
+        except Exception:
+            continue
+    await update.message.reply_text(f"Broadcast sent to {sent} groups.")
+
+# new chat member (track group)
+async def new_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    groups = read_json("groups.json", [])
+    if chat.id not in groups:
+        groups.append(chat.id)
+        write_json("groups.json", groups)
+
+# stats
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("သင်သည် admin မဟုတ်ပါ။")
+        return
+    users = read_json("users.json", {})
+    groups = read_json("groups.json", [])
+    await update.message.reply_text(f"Users: {len(users)}\nGroups: {len(groups)}")
+
+# report
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("အသုံး: /report <text>")
+        return
+    text = " ".join(context.args)
+    reports = read_json("reports.json", [])
+    reports.append({"user": update.effective_user.full_name, "text": text})
+    write_json("reports.json", reports)
+    await update.message.reply_text("Report received. ကျေးဇူးတင်ပါတယ်။")
+    for admin_id in (ADMIN_IDS or []):
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=f"📢 Report from {update.effective_user.full_name}:\n{text}")
+        except Exception:
+            continue
